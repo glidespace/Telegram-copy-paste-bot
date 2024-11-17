@@ -4,12 +4,21 @@ from telethon.sync import TelegramClient, events
 import os
 import re
 
-from config import (API_ID, API_HASH, PHONE_NUMBER, CHANNELS_COPY, CHANNEL_PASTE, DEVICE_MODEL,
-                    SYSTEM_VERSION, AUTO_DELETE_LINKS, FORWARDS)
+from config import (API_ID,
+                    API_HASH,
+                    PHONE_NUMBER,
+                    CHANNELS_COPY,
+                    CHANNEL_PASTE,
+                    DEVICE_MODEL,
+                    SYSTEM_VERSION,
+                    AUTO_DELETE_LINKS,
+                    FORWARDS)
 
 logo = """
 █▀▀ █▀█ █▀█ █▄█ ▄▄ █▀█ ▄▀█ █▀ ▀█▀ █▀▀   █▄▄ █▀█ ▀█▀|ᵇʸ ᵈᵉˡᵃᶠᵃᵘˡᵗ
 █▄▄ █▄█ █▀▀ ░█░ ░░ █▀▀ █▀█ ▄█ ░█░ ██▄   █▄█ █▄█ ░█░"""
+
+last_id_message = []
 
 def gd_print(value):
     green_color = '\033[32m'
@@ -34,77 +43,152 @@ async def check_caption(caption):
         return re.sub(r'<a\s+(?:[^>]*?\s+)?href="([^"]*)"(?:[^>]*)>(.*?)</a>', rf'<a href="{AUTO_DELETE_LINKS}">\2</a>', caption)
 
 client = TelegramClient(
-    session=f"tg_{PHONE_NUMBER}",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    device_model=DEVICE_MODEL,
-    system_version=SYSTEM_VERSION
+    session = f"tg_{PHONE_NUMBER}",
+    api_id = API_ID,
+    api_hash = API_HASH,
+    device_model = DEVICE_MODEL,
+    system_version = SYSTEM_VERSION
 )
+
+async def get_reply_to_message(event):
+    """
+    Checks if the message is a reply and returns the appropriate message ID to reply to.
+    """
+    if event.message.is_reply:
+        original_message = await event.message.get_reply_message()
+        if original_message:
+            return original_message.id
+    return None
+
+
+@client.on(events.Album(CHANNELS_COPY))
+async def album_handler(event):
+    """
+    Handles album messages, including maintaining the reply-to structure.
+    """
+    if FORWARDS is True:
+        if event.messages[0].fwd_from:
+            pass
+        else:
+            return
+    elif FORWARDS is False:
+        if event.messages[0].fwd_from:
+            return
+
+    media = []
+    caption = event.messages[0].text
+    force_document = False
+    id = event.messages[0].id
+    if id in last_id_message:
+        last_id_message.clear()
+        return # Album почему-то иногда получает ивент дважды на одно сообщение.
+    last_id_message.append(id)
+
+    caption = await check_caption(caption)
+
+    gd_print(f"Получили альбом из {len(event)} сообщений.")
+
+    reply_to = await get_reply_to_message(event)
+
+    for group_message in event.messages:
+        if group_message.photo:
+            media.append(await client.download_media(group_message, f"temp_pics/{group_message.id}.png"))
+        elif group_message.video:
+            media.append(await client.download_media(group_message, f"temp_pics/{group_message.id}.mp4"))
+        elif group_message.document:
+            file_name = next((x.file_name for x in group_message.document.attributes if isinstance(x, DocumentAttributeFilename)), None)
+            media.append(await client.download_media(group_message, f"temp_pics/{file_name}"))
+            force_document = True
+        else:
+            return bd_print("Неизвестный тип сообщения")
+
+    await client.send_file(CHANNEL_PASTE, media, caption=caption, force_document=force_document, reply_to=reply_to)
+    gd_print(f"Скопировали и успешно отправили альбом из {len(event)} сообщений.")
+
+    for file in media:
+        os.remove(file)
+
 
 @client.on(events.NewMessage(CHANNELS_COPY, forwards=FORWARDS))
 async def message_handler(event):
     """
-    Handles new messages and maintains reply structure.
+    Handles new messages and maintains the reply-to structure.
     """
+    if event.message.grouped_id is not None:
+        return
+    
+    id = event.message.id
     caption = event.message.text
-    reply_to = None
+    spoiler = False
+    web_preview = False
+    
+    try:
+        if event.message.media.__dict__['spoiler'] is True:
+            spoiler = True
+    except AttributeError:
+        pass
+    except KeyError:
+        pass
 
-    # Handle replies
-    if event.message.is_reply:
-        # Fetch the original message being replied to
-        original_message = await event.message.get_reply_message()
-        if original_message:
-            # Search for the original message in the destination channel
-            async for msg in client.iter_messages(CHANNEL_PASTE):
-                if msg.text == original_message.text:
-                    reply_to = msg.id
-                    break
+    try:
+        if event.message.media.webpage.__dict__['url'] is not None:
+            web_preview = True
+    except AttributeError:
+        pass
+    except KeyError:
+        pass
+
+    gd_print(f"Получили сообщение {id}.")
 
     caption = await check_caption(caption)
 
-    # Process media and forward
-    if event.message.photo:
-        await client.send_file(
-            CHANNEL_PASTE,
-            event.message.photo,
-            caption=caption,
-            reply_to=reply_to if reply_to else None
-        )
-    elif event.message.video:
-        await client.send_file(
-            CHANNEL_PASTE,
-            event.message.video,
-            caption=caption,
-            reply_to=reply_to if reply_to else None
-        )
-    elif event.message.document:
-        await client.send_file(
-            CHANNEL_PASTE,
-            event.message.document,
-            caption=caption,
-            reply_to=reply_to if reply_to else None
-        )
-    else:
-        await client.send_message(
-            CHANNEL_PASTE,
-            caption,
-            reply_to=reply_to if reply_to else None
-        )
+    reply_to = await get_reply_to_message(event)
 
-    gd_print(f"Successfully forwarded message with reply-to: {reply_to}")
+    if event.message.photo and not web_preview:
+        await client.download_media(event.message, f"temp_pics/pics_{id}.png")
+        await client.send_file(CHANNEL_PASTE, InputMediaUploadedPhoto(await client.upload_file(f"temp_pics/pics_{id}.png"), spoiler=spoiler), caption=caption, reply_to=reply_to)
+        os.remove(f"temp_pics/pics_{id}.png")
+
+    elif event.message.video: 
+        await client.download_media(event.message, f"temp_pics/pics_{id}.mp4")
+        await client.send_file(CHANNEL_PASTE, f"temp_pics/pics_{id}.mp4", caption=caption, video_note=True, reply_to=reply_to) 
+        os.remove(f"temp_pics/pics_{id}.mp4")
+
+    elif event.message.document:
+        file_name = next((x.file_name for x in event.message.document.attributes if isinstance(x, DocumentAttributeFilename)), None)
+        if event.message.document.mime_type == "audio/ogg":
+            path = await client.download_media(event.message, f"temp_pics/{id}")
+            await client.send_file(CHANNEL_PASTE, path, voice_note=True, reply_to=reply_to)
+            os.remove(path)
+            return
+        await client.download_media(event.message, f"temp_pics/{file_name}")
+        await client.send_file(CHANNEL_PASTE, f"temp_pics/{file_name}", caption=caption, force_document=True, reply_to=reply_to)
+        os.remove(f"temp_pics/{file_name}")
+
+    else:
+        try:
+            await client.send_message(CHANNEL_PASTE, caption, reply_to=reply_to)
+        except Exception as e:
+            bd_print(f"Ошибка при отправке сообщения: {e}")
+            return
+
+    gd_print(f"Скопировали и успешно отправили сообщение {id}.")
 
 if __name__ == "__main__":
     try:
         client.start(phone=PHONE_NUMBER)
         os.system('cls' if os.name == 'nt' else 'clear')
         print(logo)
-        gd_print(f"Logged in as {PHONE_NUMBER}.")
+        gd_print(f"Успешно вошли в аккаунт {PHONE_NUMBER}.")
+        client.parse_mode = "html"
+
         client.run_until_disconnected()
+        gd_print(f"Сессия {PHONE_NUMBER} завершена.")
     except PhoneNumberBannedError:
-        bd_print(f"Phone number {PHONE_NUMBER} is banned.")
+        bd_print(f"Аккаунт {PHONE_NUMBER} заблокирован.")
     except PasswordHashInvalidError:
-        bd_print("Invalid password.")
+        bd_print(f"Неверный пароль для аккаунта {PHONE_NUMBER}.")
     except UsernameInvalidError:
-        bd_print("Invalid username.")
+        pass
     except Exception as e:
-        bd_print(f"Error: {e}")
+        bd_print(f"Неизвестная ошибка: {e}")
