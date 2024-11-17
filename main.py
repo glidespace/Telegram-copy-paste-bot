@@ -36,11 +36,11 @@ async def check_caption(caption):
         return re.sub(r'<a\s+(?:[^>]*?\s+)?href="([^"]*)"(?:[^>]*)>(.*?)</a>', rf'<a href="{AUTO_DELETE_LINKS}">\2</a>', caption)
 
 client = TelegramClient(
-    session = f"tg_{PHONE_NUMBER}",
-    api_id = API_ID,
-    api_hash = API_HASH,
-    device_model = DEVICE_MODEL,
-    system_version = SYSTEM_VERSION
+    session=f"tg_{PHONE_NUMBER}",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    device_model=DEVICE_MODEL,
+    system_version=SYSTEM_VERSION
 )
 
 @client.on(events.Album(CHANNELS_COPY))
