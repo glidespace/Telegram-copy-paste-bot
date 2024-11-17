@@ -4,8 +4,15 @@ from telethon.sync import TelegramClient, events
 import os
 import re
 
-from config import (API_ID, API_HASH, PHONE_NUMBER, CHANNELS_COPY, CHANNEL_PASTE, DEVICE_MODEL, SYSTEM_VERSION,
-                    AUTO_DELETE_LINKS, FORWARDS)
+from config import (API_ID,
+                    API_HASH,
+                    PHONE_NUMBER,
+                    CHANNELS_COPY,
+                    CHANNEL_PASTE,
+                    DEVICE_MODEL,
+                    SYSTEM_VERSION,
+                    AUTO_DELETE_LINKS,
+                    FORWARDS)
 
 logo = """
 █▀▀ █▀█ █▀█ █▄█ ▄▄ █▀█ ▄▀█ █▀ ▀█▀ █▀▀   █▄▄ █▀█ ▀█▀|ᵇʸ ᵈᵉˡᵃᶠᵃᵘˡᵗ
@@ -43,52 +50,6 @@ client = TelegramClient(
     system_version=SYSTEM_VERSION
 )
 
-@client.on(events.Album(CHANNELS_COPY))
-async def album_handler(event):
-    """
-    Обработка альбомов
-    """
-    if FORWARDS:
-        if event.messages[0].fwd_from:
-            pass
-        else:
-            return
-    elif not FORWARDS:
-        if event.messages[0].fwd_from:
-            return
-
-    media = []
-    caption = event.messages[0].text
-    force_document = False
-    id = event.messages[0].id
-
-    if id in last_id_message:
-        last_id_message.clear()
-        return  # Avoid processing the same album twice
-    last_id_message.append(id)
-
-    caption = await check_caption(caption)
-    gd_print(f"Получили альбом из {len(event)} сообщений.")
-
-    for group_message in event.messages:
-        if group_message.photo:
-            media.append(await client.download_media(group_message, f"temp_pics/{group_message.id}.png"))
-        elif group_message.video:
-            media.append(await client.download_media(group_message, f"temp_pics/{group_message.id}.mp4"))
-        elif group_message.document:
-            file_name = next((x.file_name for x in group_message.document.attributes if isinstance(x, DocumentAttributeFilename)), None)
-            media.append(await client.download_media(group_message, f"temp_pics/{file_name}"))
-            force_document = True
-        else:
-            return bd_print("Неизвестный тип сообщения")
-
-    # Send the album
-    await client.send_file(CHANNEL_PASTE, media, caption=caption, force_document=force_document)
-    gd_print(f"Скопировали и успешно отправили альбом из {len(event)} сообщений.")
-
-    for file in media:
-        os.remove(file)  # Remove temporary files
-
 @client.on(events.NewMessage(CHANNELS_COPY, forwards=FORWARDS))
 async def message_handler(event):
     """
@@ -101,7 +62,19 @@ async def message_handler(event):
     caption = event.message.text
     spoiler = False
     web_preview = False
-    reply_to_msg_id = event.message.reply_to_msg_id  # Check if the message is a reply
+
+    # Check if the message is a reply
+    replied_message = None
+    if event.message.reply_to:
+        try:
+            replied_message = await event.message.get_reply_message()
+        except Exception as e:
+            bd_print(f"Ошибка получения сообщения для ответа: {e}")
+
+    # Fetch reply text if available
+    reply_text = ""
+    if replied_message:
+        reply_text = replied_message.text or "<Медиа-файл>"  # Handle case where replied message is media
 
     try:
         if event.message.media.__dict__.get('spoiler', False):
@@ -110,43 +83,62 @@ async def message_handler(event):
         pass
 
     try:
-        if event.message.media.webpage.__dict__.get('url') is not None:
+        if event.message.media.webpage.__dict__.get('url'):
             web_preview = True
     except AttributeError:
         pass
 
     gd_print(f"Получили сообщение {id}.")
+
     caption = await check_caption(caption)
 
     if event.message.photo and not web_preview:
         await client.download_media(event.message, f"temp_pics/pics_{id}.png")
-        await client.send_file(CHANNEL_PASTE, InputMediaUploadedPhoto(await client.upload_file(f"temp_pics/pics_{id}.png"), spoiler=spoiler), caption=caption, reply_to=reply_to_msg_id)
+        await client.send_file(
+            CHANNEL_PASTE,
+            InputMediaUploadedPhoto(await client.upload_file(f"temp_pics/pics_{id}.png"), spoiler=spoiler),
+            caption=f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption
+        )
         os.remove(f"temp_pics/pics_{id}.png")
 
-    elif event.message.video:
+    elif event.message.video: 
         await client.download_media(event.message, f"temp_pics/pics_{id}.mp4")
-        await client.send_file(CHANNEL_PASTE, f"temp_pics/pics_{id}.mp4", caption=caption, video_note=True, reply_to=reply_to_msg_id)
+        await client.send_file(
+            CHANNEL_PASTE,
+            f"temp_pics/pics_{id}.mp4",
+            caption=f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption,
+            video_note=True
+        )
         os.remove(f"temp_pics/pics_{id}.mp4")
 
     elif event.message.document:
         file_name = next((x.file_name for x in event.message.document.attributes if isinstance(x, DocumentAttributeFilename)), None)
         if event.message.document.mime_type == "audio/ogg":
             path = await client.download_media(event.message, f"temp_pics/{id}")
-            await client.send_file(CHANNEL_PASTE, path, voice_note=True, reply_to=reply_to_msg_id)
+            await client.send_file(CHANNEL_PASTE, path, voice_note=True)
             os.remove(path)
             return
         await client.download_media(event.message, f"temp_pics/{file_name}")
-        await client.send_file(CHANNEL_PASTE, f"temp_pics/{file_name}", caption=caption, force_document=True, reply_to=reply_to_msg_id)
+        await client.send_file(
+            CHANNEL_PASTE,
+            f"temp_pics/{file_name}",
+            caption=f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption,
+            force_document=True
+        )
         os.remove(f"temp_pics/{file_name}")
 
     else:
         try:
-            await client.send_message(CHANNEL_PASTE, caption, reply_to=reply_to_msg_id)  # Add reply_to here
+            await client.send_message(
+                CHANNEL_PASTE,
+                f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption
+            )
         except Exception as e:
             bd_print(f"Ошибка при отправке сообщения: {e}")
             return
 
     gd_print(f"Скопировали и успешно отправили сообщение {id}.")
+
 
 if __name__ == "__main__":
     try:
