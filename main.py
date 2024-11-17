@@ -18,30 +18,6 @@ logo = """
 █▀▀ █▀█ █▀█ █▄█ ▄▄ █▀█ ▄▀█ █▀ ▀█▀ █▀▀   █▄▄ █▀█ ▀█▀|ᵇʸ ᵈᵉˡᵃᶠᵃᵘˡᵗ
 █▄▄ █▄█ █▀▀ ░█░ ░░ █▀▀ █▀█ ▄█ ░█░ ██▄   █▄█ █▄█ ░█░"""
 
-last_id_message = []
-
-def gd_print(value):
-    green_color = '\033[32m'
-    reset_color = '\033[0m'
-    result = f"\n>{green_color} {value} {reset_color}\n"
-    print(result)
-
-def bd_print(value):
-    red_color = '\033[31m'
-    reset_color = '\033[0m'
-    result = f"\n>{red_color} {value} {reset_color}\n"
-    print(result)
-
-async def check_caption(caption):
-    if AUTO_DELETE_LINKS is False:
-        return caption
-    elif AUTO_DELETE_LINKS is True:
-        return re.sub(r'<a\s[^>]*>.*?</a>', '', caption)
-    elif AUTO_DELETE_LINKS is None:
-        return re.sub(r'<a\s[^>]*>(.*?)</a>', r'\1', caption)
-    elif AUTO_DELETE_LINKS not in [True, False, None]:
-        return re.sub(r'<a\s+(?:[^>]*?\s+)?href="([^"]*)"(?:[^>]*)>(.*?)</a>', rf'<a href="{AUTO_DELETE_LINKS}">\2</a>', caption)
-
 client = TelegramClient(
     session=f"tg_{PHONE_NUMBER}",
     api_id=API_ID,
@@ -50,111 +26,79 @@ client = TelegramClient(
     system_version=SYSTEM_VERSION
 )
 
+def gd_print(value):
+    print(f"\033[32m{value}\033[0m")
+
+def bd_print(value):
+    print(f"\033[31m{value}\033[0m")
+
+async def check_caption(caption):
+    """Handles caption cleanup logic."""
+    if AUTO_DELETE_LINKS is True:
+        return re.sub(r'<a\s[^>]*>.*?</a>', '', caption)
+    elif AUTO_DELETE_LINKS is None:
+        return re.sub(r'<a\s[^>]*>(.*?)</a>', r'\1', caption)
+    elif isinstance(AUTO_DELETE_LINKS, str):
+        return re.sub(r'<a\s+href="[^"]*">(.*?)</a>', rf'<a href="{AUTO_DELETE_LINKS}">\1</a>', caption)
+    return caption
+
 @client.on(events.NewMessage(CHANNELS_COPY, forwards=FORWARDS))
 async def message_handler(event):
-    """
-    Обработка сообщений
-    """
-    if event.message.grouped_id is not None:
-        return
-
-    id = event.message.id
+    """Handles new messages and maintains reply structure."""
     caption = event.message.text
-    spoiler = False
-    web_preview = False
+    reply_to = None
 
-    # Check if the message is a reply
-    replied_message = None
-    if event.message.reply_to:
-        try:
-            replied_message = await event.message.get_reply_message()
-        except Exception as e:
-            bd_print(f"Ошибка получения сообщения для ответа: {e}")
-
-    # Fetch reply text if available
-    reply_text = ""
-    if replied_message:
-        reply_text = replied_message.text or "<Медиа-файл>"  # Handle case where replied message is media
-
-    try:
-        if event.message.media.__dict__.get('spoiler', False):
-            spoiler = True
-    except AttributeError:
-        pass
-
-    try:
-        if event.message.media.webpage.__dict__.get('url'):
-            web_preview = True
-    except AttributeError:
-        pass
-
-    gd_print(f"Получили сообщение {id}.")
+    # Handle replies
+    if event.message.is_reply:
+        original_message = await event.message.get_reply_message()
+        if original_message:
+            # Set the reply_to to maintain reply context
+            reply_to = await client.send_message(
+                CHANNEL_PASTE,
+                original_message.text or "<Медиа-файл>",
+                file=original_message.media
+            )
 
     caption = await check_caption(caption)
 
-    if event.message.photo and not web_preview:
-        await client.download_media(event.message, f"temp_pics/pics_{id}.png")
+    if event.message.photo:
         await client.send_file(
             CHANNEL_PASTE,
-            InputMediaUploadedPhoto(await client.upload_file(f"temp_pics/pics_{id}.png"), spoiler=spoiler),
-            caption=f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption
+            event.message.photo,
+            caption=caption,
+            reply_to=reply_to
         )
-        os.remove(f"temp_pics/pics_{id}.png")
-
-    elif event.message.video: 
-        await client.download_media(event.message, f"temp_pics/pics_{id}.mp4")
+    elif event.message.video:
         await client.send_file(
             CHANNEL_PASTE,
-            f"temp_pics/pics_{id}.mp4",
-            caption=f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption,
-            video_note=True
+            event.message.video,
+            caption=caption,
+            reply_to=reply_to
         )
-        os.remove(f"temp_pics/pics_{id}.mp4")
-
     elif event.message.document:
-        file_name = next((x.file_name for x in event.message.document.attributes if isinstance(x, DocumentAttributeFilename)), None)
-        if event.message.document.mime_type == "audio/ogg":
-            path = await client.download_media(event.message, f"temp_pics/{id}")
-            await client.send_file(CHANNEL_PASTE, path, voice_note=True)
-            os.remove(path)
-            return
-        await client.download_media(event.message, f"temp_pics/{file_name}")
         await client.send_file(
             CHANNEL_PASTE,
-            f"temp_pics/{file_name}",
-            caption=f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption,
-            force_document=True
+            event.message.document,
+            caption=caption,
+            reply_to=reply_to
         )
-        os.remove(f"temp_pics/{file_name}")
-
     else:
-        try:
-            await client.send_message(
-                CHANNEL_PASTE,
-                f"Ответ на:\n{reply_text}\n\n{caption}" if reply_text else caption
-            )
-        except Exception as e:
-            bd_print(f"Ошибка при отправке сообщения: {e}")
-            return
-
-    gd_print(f"Скопировали и успешно отправили сообщение {id}.")
-
+        await client.send_message(
+            CHANNEL_PASTE,
+            caption,
+            reply_to=reply_to
+        )
 
 if __name__ == "__main__":
     try:
         client.start(phone=PHONE_NUMBER)
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print(logo)
-        gd_print(f"Успешно вошли в аккаунт {PHONE_NUMBER}.")
-        client.parse_mode = "html"
-
+        gd_print(f"Logged in as {PHONE_NUMBER}.")
         client.run_until_disconnected()
-        gd_print(f"Сессия {PHONE_NUMBER} завершена.")
     except PhoneNumberBannedError:
-        bd_print(f"Аккаунт {PHONE_NUMBER} заблокирован.")
+        bd_print(f"Phone number {PHONE_NUMBER} is banned.")
     except PasswordHashInvalidError:
-        bd_print(f"Неверный пароль для аккаунта {PHONE_NUMBER}.")
+        bd_print("Invalid password.")
     except UsernameInvalidError:
-        pass
+        bd_print("Invalid username.")
     except Exception as e:
-        bd_print(f"Неизвестная ошибка: {e}")
+        bd_print(f"Error: {e}")
