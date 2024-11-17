@@ -1,7 +1,6 @@
 from telethon.errors import PhoneNumberBannedError, PasswordHashInvalidError, UsernameInvalidError
-from telethon.types import DocumentAttributeFilename, InputMediaUploadedPhoto
+from telethon.types import DocumentAttributeFilename
 from telethon.sync import TelegramClient, events
-import os
 import re
 
 from config import (API_ID,
@@ -52,11 +51,10 @@ async def message_handler(event):
     if event.message.is_reply:
         original_message = await event.message.get_reply_message()
         if original_message:
-            # Set the reply_to to maintain reply context
-            reply_to = await client.send_message(
+            # Get the ID of the original message in the target channel
+            reply_to = await client.get_messages(
                 CHANNEL_PASTE,
-                original_message.text or "<Медиа-файл>",
-                file=original_message.media
+                ids=original_message.id
             )
 
     caption = await check_caption(caption)
@@ -66,27 +64,27 @@ async def message_handler(event):
             CHANNEL_PASTE,
             event.message.photo,
             caption=caption,
-            reply_to=reply_to
+            reply_to=reply_to.id if reply_to else None
         )
     elif event.message.video:
         await client.send_file(
             CHANNEL_PASTE,
             event.message.video,
             caption=caption,
-            reply_to=reply_to
+            reply_to=reply_to.id if reply_to else None
         )
     elif event.message.document:
         await client.send_file(
             CHANNEL_PASTE,
             event.message.document,
             caption=caption,
-            reply_to=reply_to
+            reply_to=reply_to.id if reply_to else None
         )
     else:
         await client.send_message(
             CHANNEL_PASTE,
             caption,
-            reply_to=reply_to
+            reply_to=reply_to.id if reply_to else None
         )
 
 if __name__ == "__main__":
